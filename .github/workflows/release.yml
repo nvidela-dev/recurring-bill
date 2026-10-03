@@ -1,0 +1,50 @@
+name: Build macOS release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (e.g. v1.2.0)
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: macos-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Prepare Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Verify and build
+        run: |
+          npm ci
+          npm test
+          npm run desktop:universal
+          npm run package:macos
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --title "Recurring Bill $RELEASE_TAG" --notes-file docs/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" release/Recurring-Bill-macOS-universal.zip release/SHA256SUMS.txt --clobber
